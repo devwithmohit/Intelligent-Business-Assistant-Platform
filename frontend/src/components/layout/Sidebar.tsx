@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useMemo } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import {
   Drawer,
@@ -10,6 +10,7 @@ import {
   Box,
   Typography,
   Divider,
+  Avatar,
   useTheme,
 } from "@mui/material";
 import DashboardIcon from "@mui/icons-material/Dashboard";
@@ -20,6 +21,9 @@ import InventoryIcon from "@mui/icons-material/Inventory";
 import IntegrationInstructionsIcon from "@mui/icons-material/IntegrationInstructions";
 import SettingsIcon from "@mui/icons-material/Settings";
 import HelpOutlineIcon from "@mui/icons-material/HelpOutline";
+import LogoutIcon from "@mui/icons-material/Logout";
+import AutoAwesomeIcon from "@mui/icons-material/AutoAwesome";
+import useAuth from "../../hooks/useAuth";
 
 const drawerWidth = 260;
 
@@ -85,6 +89,21 @@ const Sidebar: React.FC<SidebarProps> = ({
   const theme = useTheme();
   const navigate = useNavigate();
   const location = useLocation();
+  const { user, logout } = useAuth();
+
+  const userInitials = useMemo(() => {
+    if (user?.name) {
+      const parts = user.name.trim().split(/\s+/);
+      if (parts.length >= 2) {
+        return (parts[0][0] + parts[1][0]).toUpperCase();
+      }
+      return user.name.slice(0, 2).toUpperCase();
+    }
+    if (user?.email) {
+      return user.email.slice(0, 2).toUpperCase();
+    }
+    return "U";
+  }, [user]);
 
   const handleClick = (path: string) => {
     if (onNavigate) onNavigate(path);
@@ -92,20 +111,50 @@ const Sidebar: React.FC<SidebarProps> = ({
     if (onClose) onClose();
   };
 
+  const handleLogout = async () => {
+    if (onClose) onClose();
+    try {
+      await logout();
+    } finally {
+      localStorage.removeItem("access_token");
+      localStorage.removeItem("refresh_token");
+      navigate("/login", { replace: true });
+    }
+  };
+
   const drawerContent = (
-    <>
+    <Box sx={{ display: "flex", flexDirection: "column", height: "100%" }}>
       <Toolbar>
-        <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-          <img src="/vite.svg" alt="logo" style={{ height: 32 }} />
-          <Typography variant="h6" noWrap>
-            Intelligent Assistant
-          </Typography>
+        <Box sx={{ display: "flex", alignItems: "center", gap: 1.5 }}>
+          <Box
+            sx={{
+              width: 34,
+              height: 34,
+              borderRadius: 2,
+              bgcolor: "primary.main",
+              color: "primary.contrastText",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              boxShadow: 2,
+            }}
+          >
+            <AutoAwesomeIcon fontSize="small" />
+          </Box>
+          <Box>
+            <Typography variant="subtitle1" sx={{ fontWeight: 700, lineHeight: 1.2 }} noWrap>
+              IBA Platform
+            </Typography>
+            <Typography variant="caption" color="text.secondary" sx={{ display: "block", fontSize: "0.7rem" }}>
+              Intelligent Assistant
+            </Typography>
+          </Box>
         </Box>
       </Toolbar>
 
       <Divider />
 
-      <List>
+      <List sx={{ flexGrow: 1, py: 1 }}>
         {navItems.map((item) => {
           const selected = location.pathname === item.path;
           return (
@@ -115,18 +164,62 @@ const Sidebar: React.FC<SidebarProps> = ({
               onClick={() => handleClick(item.path)}
               aria-label={item.label}
               sx={{
+                mx: 1,
+                mb: 0.5,
+                borderRadius: 1.5,
                 "&.Mui-selected": {
                   backgroundColor: theme.palette.action.selected,
+                  fontWeight: 600,
                 },
               }}
             >
-              <ListItemIcon>{item.icon}</ListItemIcon>
-              <ListItemText primary={item.label} />
+              <ListItemIcon sx={{ minWidth: 40, color: selected ? "primary.main" : "inherit" }}>
+                {item.icon}
+              </ListItemIcon>
+              <ListItemText
+                primary={item.label}
+                primaryTypographyProps={{
+                  variant: "body2",
+                  fontWeight: selected ? 600 : 400,
+                }}
+              />
             </ListItemButton>
           );
         })}
       </List>
-    </>
+
+      <Divider />
+
+      <Box sx={{ p: 2 }}>
+        <Box sx={{ display: "flex", alignItems: "center", gap: 1.5, mb: 1 }}>
+          <Avatar sx={{ width: 34, height: 34, bgcolor: "secondary.main", fontSize: "0.85rem", fontWeight: 700 }}>
+            {userInitials}
+          </Avatar>
+          <Box sx={{ overflow: "hidden", flexGrow: 1 }}>
+            <Typography variant="body2" sx={{ fontWeight: 600 }} noWrap>
+              {user?.name || "User Account"}
+            </Typography>
+            <Typography variant="caption" color="text.secondary" noWrap display="block">
+              {user?.email || ""}
+            </Typography>
+          </Box>
+        </Box>
+        <ListItemButton
+          onClick={handleLogout}
+          sx={{
+            borderRadius: 1.5,
+            color: "error.main",
+            py: 0.75,
+            "&:hover": { bgcolor: "action.hover" },
+          }}
+        >
+          <ListItemIcon sx={{ color: "error.main", minWidth: 36 }}>
+            <LogoutIcon fontSize="small" />
+          </ListItemIcon>
+          <ListItemText primary="Log Out" primaryTypographyProps={{ variant: "body2", fontWeight: 600 }} />
+        </ListItemButton>
+      </Box>
+    </Box>
   );
 
   return (

@@ -48,6 +48,9 @@ export const login = async (payload: LoginPayload): Promise<AuthResponse> => {
     if (data?.access_token) {
       setAuthToken(data.access_token);
     }
+    if (data?.refresh_token) {
+      localStorage.setItem("refresh_token", data.refresh_token);
+    }
     return data;
   } catch (error) {
     throw new Error(extractErrorMessage(error, "Login failed"));
@@ -61,6 +64,9 @@ export const signup = async (payload: SignupPayload): Promise<AuthResponse> => {
     if (data?.access_token) {
       setAuthToken(data.access_token);
     }
+    if (data?.refresh_token) {
+      localStorage.setItem("refresh_token", data.refresh_token);
+    }
     return data;
   } catch (error) {
     throw new Error(extractErrorMessage(error, "Signup failed"));
@@ -69,6 +75,8 @@ export const signup = async (payload: SignupPayload): Promise<AuthResponse> => {
 
 export const logout = async (): Promise<void> => {
   setAuthToken(null);
+  localStorage.removeItem("access_token");
+  localStorage.removeItem("refresh_token");
 };
 
 export const getCurrentUser = async (): Promise<AuthUser | null> => {

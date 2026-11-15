@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import {
   Alert,
   Box,
@@ -9,14 +9,20 @@ import {
   CircularProgress,
   Divider,
   Grid,
+  IconButton,
   List,
   ListItemButton,
   ListItemText,
   MenuItem,
   Stack,
   TextField,
+  Tooltip,
   Typography,
 } from "@mui/material";
+import CheckCircleIcon from "@mui/icons-material/CheckCircle";
+import WifiOffIcon from "@mui/icons-material/WifiOff";
+import SyncIcon from "@mui/icons-material/Sync";
+import ErrorOutlineIcon from "@mui/icons-material/ErrorOutline";
 
 import api from "../../services/api";
 
@@ -45,6 +51,7 @@ const Chat = () => {
   const [message, setMessage] = useState("");
   const [agentType, setAgentType] = useState("customer_service");
   const [connectionState, setConnectionState] = useState("offline");
+  const [reconnectKey, setReconnectKey] = useState(0);
 
   const sortedConversations = useMemo(
     () => [...conversations].sort((left, right) => right.id - left.id),
@@ -171,7 +178,7 @@ const Chat = () => {
     return () => {
       socket.close();
     };
-  }, [conversationId]);
+  }, [conversationId, reconnectKey]);
 
   const handleSend = async () => {
     const trimmed = message.trim();
@@ -255,12 +262,53 @@ const Chat = () => {
             Choose an agent, keep the thread context, and continue live conversations over WebSocket.
           </Typography>
         </Box>
-        <Stack direction="row" spacing={1.5}>
-          <Chip
-            label={`Socket: ${connectionState}`}
-            color={connectionState === "live" ? "success" : "default"}
-            variant="outlined"
-          />
+        <Stack direction="row" spacing={1.5} alignItems="center">
+          {connectionState === "live" ? (
+            <Chip
+              icon={<CheckCircleIcon style={{ fontSize: 16 }} />}
+              label="Live Handshake"
+              color="success"
+              size="small"
+              sx={{ fontWeight: 600 }}
+            />
+          ) : connectionState === "connecting" ? (
+            <Chip
+              icon={<CircularProgress size={12} color="inherit" />}
+              label="Handshaking..."
+              color="warning"
+              size="small"
+              sx={{ fontWeight: 600 }}
+            />
+          ) : connectionState === "degraded" ? (
+            <Chip
+              icon={<ErrorOutlineIcon style={{ fontSize: 16 }} />}
+              label="Connection Degraded"
+              color="error"
+              size="small"
+              sx={{ fontWeight: 600 }}
+            />
+          ) : (
+            <Chip
+              icon={<WifiOffIcon style={{ fontSize: 16 }} />}
+              label="Socket Offline"
+              size="small"
+              variant="outlined"
+              sx={{ fontWeight: 600 }}
+            />
+          )}
+
+          {conversationId && connectionState !== "live" ? (
+            <Tooltip title="Reconnect WebSocket">
+              <IconButton
+                size="small"
+                color="primary"
+                onClick={() => setReconnectKey((k) => k + 1)}
+              >
+                <SyncIcon fontSize="small" />
+              </IconButton>
+            </Tooltip>
+          ) : null}
+
           <Button variant="contained" onClick={startNewConversation}>
             New Conversation
           </Button>

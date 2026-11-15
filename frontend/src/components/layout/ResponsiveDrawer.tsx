@@ -3,6 +3,7 @@ import { Box, CssBaseline, Toolbar } from "@mui/material";
 import { useNavigate } from "react-router-dom";
 import Topbar from "./Topbar";
 import Sidebar from "./Sidebar";
+import useAuth from "../../hooks/useAuth";
 
 type ResponsiveDrawerProps = {
   children?: React.ReactNode;
@@ -12,6 +13,7 @@ type ResponsiveDrawerProps = {
 const ResponsiveDrawer: React.FC<ResponsiveDrawerProps> = ({ children, drawerWidth = 260 }) => {
   const [mobileOpen, setMobileOpen] = useState(false);
   const navigate = useNavigate();
+  const { logout } = useAuth();
 
   const handleDrawerToggle = () => setMobileOpen((v) => !v);
   const handleNavigate = (path: string) => {
@@ -21,9 +23,14 @@ const ResponsiveDrawer: React.FC<ResponsiveDrawerProps> = ({ children, drawerWid
   };
 
   const handleProfile = () => navigate("/profile");
-  const handleLogout = () => {
-    // simple client-side logout navigation - backend/logout should be called elsewhere
-    navigate("/login");
+  const handleLogout = async () => {
+    try {
+      await logout();
+    } finally {
+      localStorage.removeItem("access_token");
+      localStorage.removeItem("refresh_token");
+      navigate("/login", { replace: true });
+    }
   };
 
   return (

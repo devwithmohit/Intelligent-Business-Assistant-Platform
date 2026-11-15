@@ -24,7 +24,8 @@ import api from "../../services/api";
 const integrationSchema = yup.object({
   name: yup.string().required("Integration name is required"),
   type: yup.string().required("Integration type is required"),
-  client_secrets_path: yup.string().required("Credential path is required"),
+  token: yup.string().optional(),
+  client_secrets_path: yup.string().optional(),
   enabled: yup.boolean().default(true),
 });
 
@@ -61,6 +62,7 @@ const Settings = () => {
     defaultValues: {
       name: "",
       type: "gmail",
+      token: "",
       client_secrets_path: "",
       enabled: true,
     },
@@ -108,14 +110,24 @@ const Settings = () => {
     setSuccess("");
     try {
       const payload = {
-        ...values,
+        name: values.name,
+        type: values.type,
         enabled: values.enabled,
       };
+      if (values.token) {
+        if (values.type === "slack") payload.token = values.token;
+        else if (values.type === "hubspot") payload.api_key = values.token;
+        else payload.token = values.token;
+      }
+      if (values.client_secrets_path) {
+        payload.client_secrets_path = values.client_secrets_path;
+      }
       await api.post("/api/v1/integrations/", payload);
-      setSuccess("Integration settings saved.");
+      setSuccess("Integration settings saved and encrypted.");
       integrationForm.reset({
         name: "",
         type: values.type,
+        token: "",
         client_secrets_path: "",
         enabled: true,
       });
@@ -270,15 +282,16 @@ const Settings = () => {
                   )}
                 />
                 <Controller
-                  name="client_secrets_path"
+                  name="token"
                   control={integrationForm.control}
                   render={({ field, fieldState }) => (
                     <TextField
                       {...field}
-                      label="Credential Path"
-                      placeholder="/secrets/gmail-client.json"
+                      type="password"
+                      label="API Key / Token"
+                      placeholder="Enter API key or OAuth token"
                       error={!!fieldState.error}
-                      helperText={fieldState.error?.message}
+                      helperText={fieldState.error?.message || "Encrypted securely at rest."}
                       fullWidth
                     />
                   )}

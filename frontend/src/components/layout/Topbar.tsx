@@ -1,4 +1,5 @@
-import React, { useState } from "react";
+import React, { useState, useMemo } from "react";
+import { useNavigate } from "react-router-dom";
 import {
   AppBar,
   Toolbar,
@@ -9,6 +10,7 @@ import {
   Avatar,
   Menu,
   MenuItem,
+  Divider,
   Box,
   useTheme,
   alpha,
@@ -18,6 +20,7 @@ import MenuIcon from "@mui/icons-material/Menu";
 import SearchIcon from "@mui/icons-material/Search";
 import NotificationsIcon from "@mui/icons-material/Notifications";
 import MoreVertIcon from "@mui/icons-material/MoreVert";
+import useAuth from "../../hooks/useAuth";
 
 interface TopbarProps {
   title?: string;
@@ -52,7 +55,6 @@ const StyledInputBase = styled(InputBase)(({ theme }) => ({
   color: "inherit",
   "& .MuiInputBase-input": {
     padding: theme.spacing(1, 1, 1, 0),
-    // vertical padding + font size from searchIcon
     paddingLeft: `calc(1em + ${theme.spacing(3)})`,
     transition: theme.transitions.create("width"),
     width: "12ch",
@@ -68,8 +70,24 @@ const Topbar: React.FC<TopbarProps> = ({
   notificationsCount = 0,
 }) => {
   const theme = useTheme();
+  const navigate = useNavigate();
+  const { user, logout } = useAuth();
   const [anchorEl, setAnchorEl] = useState<HTMLElement | null>(null);
   const [mobileAnchor, setMobileAnchor] = useState<HTMLElement | null>(null);
+
+  const userInitials = useMemo(() => {
+    if (user?.name) {
+      const parts = user.name.trim().split(/\s+/);
+      if (parts.length >= 2) {
+        return (parts[0][0] + parts[1][0]).toUpperCase();
+      }
+      return user.name.slice(0, 2).toUpperCase();
+    }
+    if (user?.email) {
+      return user.email.slice(0, 2).toUpperCase();
+    }
+    return "U";
+  }, [user]);
 
   const handleProfileOpen = (e: React.MouseEvent<HTMLElement>) => setAnchorEl(e.currentTarget);
   const handleProfileClose = () => setAnchorEl(null);
@@ -77,9 +95,20 @@ const Topbar: React.FC<TopbarProps> = ({
   const handleMobileOpen = (e: React.MouseEvent<HTMLElement>) => setMobileAnchor(e.currentTarget);
   const handleMobileClose = () => setMobileAnchor(null);
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
     handleProfileClose();
-    if (onLogout) onLogout();
+    handleMobileClose();
+    if (onLogout) {
+      onLogout();
+    } else {
+      try {
+        await logout();
+      } finally {
+        localStorage.removeItem("access_token");
+        localStorage.removeItem("refresh_token");
+        navigate("/login", { replace: true });
+      }
+    }
   };
 
   return (
@@ -96,7 +125,7 @@ const Topbar: React.FC<TopbarProps> = ({
           <MenuIcon />
         </IconButton>
 
-        <Typography variant="h6" noWrap component="div" sx={{ flexShrink: 0 }}>
+        <Typography variant="h6" noWrap component="div" sx={{ flexShrink: 0, fontWeight: 600 }}>
           {title}
         </Typography>
 
@@ -123,7 +152,9 @@ const Topbar: React.FC<TopbarProps> = ({
             size="large"
             sx={{ ml: 0.5 }}
           >
-            <Avatar sx={{ width: 32, height: 32 }}>IU</Avatar>
+            <Avatar sx={{ width: 34, height: 34, bgcolor: "secondary.main", fontSize: "0.85rem", fontWeight: 700 }}>
+              {userInitials}
+            </Avatar>
           </IconButton>
 
           <IconButton
@@ -145,18 +176,36 @@ const Topbar: React.FC<TopbarProps> = ({
           anchorOrigin={{ vertical: "bottom", horizontal: "right" }}
           transformOrigin={{ vertical: "top", horizontal: "right" }}
         >
+          <Box sx={{ px: 2, py: 1 }}>
+            <Typography variant="subtitle2" sx={{ fontWeight: 600 }} noWrap>
+              {user?.name || "User Account"}
+            </Typography>
+            <Typography variant="caption" color="text.secondary" noWrap display="block">
+              {user?.email || ""}
+            </Typography>
+          </Box>
+          <Divider />
           <MenuItem
             onClick={() => {
               handleProfileClose();
               if (onProfile) onProfile();
+              else navigate("/profile");
             }}
           >
             Profile
           </MenuItem>
-          <MenuItem onClick={() => { handleProfileClose(); }}>
+          <MenuItem
+            onClick={() => {
+              handleProfileClose();
+              navigate("/settings");
+            }}
+          >
             Settings
           </MenuItem>
-          <MenuItem onClick={handleLogout}>Logout</MenuItem>
+          <Divider />
+          <MenuItem onClick={handleLogout} sx={{ color: "error.main" }}>
+            Logout
+          </MenuItem>
         </Menu>
 
         {/* Mobile menu */}
@@ -178,10 +227,14 @@ const Topbar: React.FC<TopbarProps> = ({
           <MenuItem
             onClick={() => {
               handleMobileClose();
-              handleProfileOpen as any;
+              if (onProfile) onProfile();
+              else navigate("/profile");
             }}
           >
-            <Typography>Account</Typography>
+            <Typography>Account Profile</Typography>
+          </MenuItem>
+          <MenuItem onClick={handleLogout} sx={{ color: "error.main" }}>
+            <Typography color="error">Logout</Typography>
           </MenuItem>
         </Menu>
       </Toolbar>

@@ -85,6 +85,8 @@ export const AuthProvider = ({ children }) => {
   const logout = () => {
     setSession(null);
     setUser(null);
+    localStorage.removeItem("access_token");
+    localStorage.removeItem("refresh_token");
     authService.logout().catch(() => {});
   };
 
