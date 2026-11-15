@@ -92,6 +92,8 @@ class Settings(BaseSettings):
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7
 
     REDIS_URL: str | None = None
+    CELERY_BROKER_URL: str | None = None
+    CELERY_RESULT_BACKEND: str | None = None
     RATE_LIMIT_REQUESTS: int = 100
     RATE_LIMIT_WINDOW: int = 60
 

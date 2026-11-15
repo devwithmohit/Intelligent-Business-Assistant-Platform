@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
@@ -74,6 +74,62 @@ async def get_agent(
         )
     except OrchestrationServiceError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+
+@router.post("/{agent_type}/dispatch", response_model=Dict[str, Any])
+async def dispatch_agent_async(
+    agent_type: str,
+    payload: AgentRunRequest,
+    current_user=Depends(auth_service.get_current_user),
+    service: OrchestrationService = Depends(_service),
+):
+    """
+    Dispatch an agent execution task to Celery background task workers asynchronously.
+    Returns the job_id immediately without blocking the HTTP request thread.
+    """
+    try:
+        from ...core import database
+        from ...services import job_service
+        from ...tasks.agent_tasks import run_agent_async
+
+        # Ensure agent exists
+        await service.get_agent_status(agent_type, current_user.id)
+
+        celery_task = run_agent_async.delay(
+            agent_type=agent_type,
+            input_text=payload.input,
+            user_id=current_user.id,
+            context=payload.context,
+        )
+
+        db = database.SessionLocal()
+        try:
+            job = job_service.create_job(
+                db=db,
+                job_id=celery_task.id,
+                user_id=current_user.id,
+                job_type="agent_run",
+                resource_id=agent_type,
+                payload={
+                    "agent_type": agent_type,
+                    "input": payload.input,
+                    "context": payload.context,
+                },
+            )
+            return {
+                "job_id": job.id,
+                "agent_type": agent_type,
+                "status": job.status,
+            }
+        finally:
+            db.close()
+    except OrchestrationServiceError as exc:
+        status_code = (
+            status.HTTP_404_NOT_FOUND
+            if "not found" in str(exc).lower()
+            else status.HTTP_400_BAD_REQUEST
+        )
+        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
 
 
 @router.post("/{agent_type}/run", response_model=AgentRunResponse)

@@ -38,7 +38,11 @@ class WorkflowService:
             or os.getenv("WORKFLOW_DIR")
             or os.path.join(os.getcwd(), "data", "workflows")
         )
-        os.makedirs(self.persist_dir, exist_ok=True)
+        try:
+            os.makedirs(self.persist_dir, exist_ok=True)
+        except (OSError, PermissionError):
+            self.persist_dir = "/tmp/workflows"
+            os.makedirs(self.persist_dir, exist_ok=True)
         # Keyed by (user_id, workflow_name)
         self._graphs: Dict[Tuple[int, str], GraphBuilder] = {}
         self._defs: Dict[Tuple[int, str], _schemas.WorkflowDefinition] = {}
@@ -256,6 +260,59 @@ class WorkflowService:
             initial_context=initial_context,
             metadata=meta,
         )
+
+    async def dispatch_async(
+        self,
+        workflow_name: str,
+        start_node: str,
+        user_id: int,
+        initial_context: Optional[Dict[str, Any]] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        timeout: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        """
+        Dispatch a workflow execution to Celery background task queue.
+        Records a background_jobs row in the database and returns the job ID immediately.
+        """
+        graph = self._get_graph(workflow_name, user_id=user_id)
+        if not graph:
+            raise WorkflowServiceError(f"workflow not found: {workflow_name}")
+
+        from ..tasks.workflow_tasks import execute_workflow_async
+        from . import job_service
+
+        db = database.SessionLocal()
+        try:
+            # Enqueue Celery task
+            celery_task = execute_workflow_async.delay(
+                workflow_name=workflow_name,
+                start_node=start_node,
+                user_id=user_id,
+                initial_context=initial_context,
+                metadata=metadata,
+                timeout=timeout,
+            )
+            job = job_service.create_job(
+                db=db,
+                job_id=celery_task.id,
+                user_id=user_id,
+                job_type="workflow_execution",
+                resource_id=workflow_name,
+                payload={
+                    "workflow_name": workflow_name,
+                    "start_node": start_node,
+                    "initial_context": initial_context or {},
+                    "metadata": metadata or {},
+                    "timeout": timeout,
+                },
+            )
+            return {
+                "job_id": job.id,
+                "workflow_name": workflow_name,
+                "status": job.status,
+            }
+        finally:
+            db.close()
 
     async def run_and_wait(
         self,

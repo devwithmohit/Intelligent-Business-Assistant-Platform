@@ -44,7 +44,11 @@ class StateManager:
         self._load_hook = load_hook
         # optional simple file-based persistence directory
         self.persist_dir = persist_dir or os.getenv("WORKFLOW_STATE_DIR") or "./data/workflow_states"
-        os.makedirs(self.persist_dir, exist_ok=True)
+        try:
+            os.makedirs(self.persist_dir, exist_ok=True)
+        except (OSError, PermissionError):
+            self.persist_dir = "/tmp/workflow_states"
+            os.makedirs(self.persist_dir, exist_ok=True)
         # try to use redis.asyncio if available for optional backing store
         try:
             import redis.asyncio as aioredis  # type: ignore

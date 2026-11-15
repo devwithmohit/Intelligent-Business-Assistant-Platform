@@ -13,6 +13,7 @@ if TYPE_CHECKING:
     from .conversation_models import Conversation
     from .integration_models import Integration
     from .knowledge_models import KnowledgeDocument
+    from .job_models import BackgroundJob
     from .task_models import Task
     from .workflow_models import Workflow
 
@@ -67,6 +68,9 @@ class User(Base):
     )
     knowledge_documents: Mapped[list["KnowledgeDocument"]] = relationship(
         "KnowledgeDocument", back_populates="user", cascade="all, delete-orphan"
+    )
+    background_jobs: Mapped[list["BackgroundJob"]] = relationship(
+        "BackgroundJob", back_populates="user", cascade="all, delete-orphan"
     )
     assigned_tasks: Mapped[list["Task"]] = relationship(
         "Task",

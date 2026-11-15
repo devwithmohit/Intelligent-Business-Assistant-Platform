@@ -29,6 +29,35 @@ services:
       chroma:
         condition: service_started
 
+  celery_worker:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    working_dir: /app
+    volumes:
+      - ./:/app
+    env_file:
+      - path: ./backend/.env
+        required: false
+      - path: ./.env
+        required: false
+    environment:
+      DATABASE_URL: postgresql+psycopg2://iba_user:iba_pass@postgres:5432/iba_db
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
+      WORKFLOW_DIR: /app/data/workflows
+      WORKFLOW_STATE_DIR: /app/data/workflow_states
+      CHROMA_DIR: /app/data/vector_db/chroma
+    command: celery -A backend.core.celery_app.celery_app worker --loglevel=info --concurrency=2
+    depends_on:
+      backend:
+        condition: service_started
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+
   frontend:
     build:
       context: .

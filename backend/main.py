@@ -8,6 +8,7 @@ from .api.v1 import analytics as analytics_router
 from .api.v1 import auth as auth_router
 from .api.v1 import chat as chat_router
 from .api.v1 import integrations as integrations_router
+from .api.v1 import jobs as jobs_router
 from .api.v1 import knowledge as knowledge_router
 from .api.v1 import tasks as tasks_router
 from .api.v1 import users as users_router
@@ -91,6 +92,7 @@ for router_module in (
     analytics_router,
     chat_router,
     integrations_router,
+    jobs_router,
     knowledge_router,
     tasks_router,
     workflows_router,

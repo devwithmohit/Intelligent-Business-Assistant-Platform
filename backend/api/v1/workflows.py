@@ -161,6 +161,42 @@ async def start_workflow(
         raise HTTPException(status_code=404, detail=str(e))
 
 
+@router.post("/{name}/dispatch", response_model=Dict[str, Any])
+async def dispatch_workflow_async(
+    name: str,
+    req: schemas.WorkflowStartRequest,
+    timeout: Optional[float] = Query(
+        None, description="Maximum execution timeout in seconds"
+    ),
+    current_user=Depends(auth_service.get_current_user),
+    service: WorkflowService = Depends(_svc),
+):
+    """
+    Dispatch a workflow execution to Celery background task workers asynchronously.
+    Returns the job_id immediately without blocking the HTTP request thread.
+    """
+    if req.workflow_name != name:
+        raise HTTPException(
+            status_code=400, detail="workflow_name in body must match path"
+        )
+    existing = await service.get_workflow(name, user_id=current_user.id)
+    if not existing:
+        raise HTTPException(status_code=404, detail="workflow not found")
+    try:
+        return await service.dispatch_async(
+            workflow_name=name,
+            start_node=req.start_node,
+            user_id=current_user.id,
+            initial_context=req.initial_context,
+            metadata=req.metadata,
+            timeout=timeout,
+        )
+    except WorkflowServiceError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.post("/{name}/run", response_model=schemas.WorkflowInstance)
 async def run_and_wait(
     name: str,

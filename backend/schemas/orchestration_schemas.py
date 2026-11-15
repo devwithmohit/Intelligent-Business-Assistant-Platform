@@ -20,6 +20,7 @@ class WorkflowEdge(BaseModel):
 
 class WorkflowDefinition(BaseModel):
     name: str = Field(..., description="Workflow name / identifier")
+    description: Optional[str] = Field(None, description="Human-friendly workflow description")
     agents: Optional[Dict[str, Any]] = Field(default_factory=dict, description="Registered agents and their metadata")
     nodes: List[WorkflowNode] = Field(default_factory=list, description="Workflow nodes")
     edges: List[WorkflowEdge] = Field(default_factory=list, description="Directed edges between nodes")
