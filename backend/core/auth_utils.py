@@ -46,6 +46,10 @@ async def get_user_from_token(token: str) -> Optional[Any]:
     except Exception:
         return None
 
+    # Reject refresh tokens when resolving authenticated user
+    if payload.get("typ") == "refresh":
+        return None
+
     subject = payload.get("sub")
     if not subject:
         return None

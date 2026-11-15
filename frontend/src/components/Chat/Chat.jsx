@@ -30,9 +30,8 @@ const agentOptions = [
 
 const buildWebSocketUrl = (conversationId) => {
   const baseUrl = api.defaults.baseURL || window.location.origin;
-  const token = localStorage.getItem("access_token");
   const wsBase = baseUrl.replace(/^http/, "ws");
-  return `${wsBase}/api/ws/chat/${conversationId}?token=${encodeURIComponent(token || "")}`;
+  return `${wsBase}/api/ws/chat/${conversationId}`;
 };
 
 const Chat = () => {
@@ -118,10 +117,35 @@ const Chat = () => {
     setConnectionState("connecting");
 
     socket.onopen = () => {
-      setConnectionState("live");
+      const token = localStorage.getItem("access_token");
+      if (!token) {
+        setConnectionState("offline");
+        setError("Authentication required for live chat.");
+        socket.close();
+        return;
+      }
+      // Send secure in-band authentication frame immediately upon connection establishment
+      socket.send(JSON.stringify({ type: "auth", token }));
     };
 
     socket.onmessage = (event) => {
+      // Handle control frames (e.g. handshake confirmation)
+      try {
+        const payload = JSON.parse(event.data);
+        if (
+          payload?.type === "auth_success" ||
+          payload?.status === "authenticated"
+        ) {
+          setConnectionState("live");
+          return;
+        }
+        if (payload?.type === "pong") {
+          return;
+        }
+      } catch {
+        // Not a JSON control message; display as assistant reply
+      }
+
       setMessages((current) => [
         ...current,
         {

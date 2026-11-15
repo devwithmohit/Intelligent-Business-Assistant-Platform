@@ -1,18 +1,18 @@
 import typing as t
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
-from jose import JWTError, jwt
-from passlib.context import CryptContext
 
 from ..core import config
+from ..core import jwt as jwt_core
+from ..core import security as security_core
 from ..schemas import auth_schemas, user_schemas
 from . import user_service
 
 SETTINGS = config.settings
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+pwd_context = security_core.pwd_context
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login")
 
 
@@ -21,31 +21,44 @@ class AuthError(Exception):
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    return pwd_context.verify(plain_password, hashed_password)
+    return security_core.verify_password(plain_password, hashed_password)
 
 
 def get_password_hash(password: str) -> str:
-    return pwd_context.hash(password)
+    return security_core.get_password_hash(password)
 
 
-def _create_access_token(subject: str, expires_delta: timedelta | None = None) -> str:
-    expire = datetime.utcnow() + (expires_delta or timedelta(minutes=SETTINGS.ACCESS_TOKEN_EXPIRE_MINUTES))
-    to_encode = {"sub": str(subject), "exp": int(expire.timestamp()), "iat": int(datetime.utcnow().timestamp())}
-    return jwt.encode(to_encode, SETTINGS.SECRET_KEY, algorithm=SETTINGS.ALGORITHM)
+def _create_access_token(
+    subject: str, expires_delta: timedelta | None = None
+) -> str:
+    expires_minutes = (
+        int(expires_delta.total_seconds() / 60)
+        if expires_delta is not None
+        else SETTINGS.ACCESS_TOKEN_EXPIRE_MINUTES
+    )
+    return jwt_core.create_access_token(
+        subject=str(subject), expires_minutes=expires_minutes
+    )
 
 
-def _create_refresh_token(subject: str, expires_delta: timedelta | None = None) -> str:
-    expire = datetime.utcnow() + (expires_delta or timedelta(days=getattr(SETTINGS, "REFRESH_TOKEN_EXPIRE_DAYS", 7)))
-    to_encode = {"sub": str(subject), "exp": int(expire.timestamp()), "iat": int(datetime.utcnow().timestamp()), "typ": "refresh"}
-    return jwt.encode(to_encode, SETTINGS.SECRET_KEY, algorithm=SETTINGS.ALGORITHM)
+def _create_refresh_token(
+    subject: str, expires_delta: timedelta | None = None
+) -> str:
+    expires_days = (
+        int(expires_delta.total_seconds() / 86400)
+        if expires_delta is not None
+        else getattr(SETTINGS, "REFRESH_TOKEN_EXPIRE_DAYS", 7)
+    )
+    return jwt_core.create_refresh_token(
+        subject=str(subject), expires_days=expires_days
+    )
 
 
 def _decode_token(token: str) -> dict:
     try:
-        payload = jwt.decode(token, SETTINGS.SECRET_KEY, algorithms=[SETTINGS.ALGORITHM])
-        return payload
-    except JWTError as e:
-        raise AuthError("Invalid token") from e
+        return jwt_core.decode_token(token)
+    except jwt_core.TokenError as e:
+        raise AuthError(str(e)) from e
 
 
 async def _create_token_response_for_user(user: t.Any) -> dict:
@@ -105,18 +118,22 @@ async def register(payload: auth_schemas.RegisterRequest) -> auth_schemas.TokenR
 
 
 async def refresh_token(refresh_token: str) -> auth_schemas.TokenResponse:
-    try:
-        payload = _decode_token(refresh_token)
-    except AuthError:
-        raise AuthError("Invalid refresh token")
+    if not refresh_token:
+        raise AuthError("Missing refresh token")
 
-    # ensure token is actually a refresh token if typ present
-    if payload.get("typ") and payload.get("typ") != "refresh":
-        raise AuthError("Invalid token type")
+    try:
+        # Strictly enforce typ == 'refresh'
+        payload = jwt_core.verify_token(refresh_token, require_type="refresh")
+    except jwt_core.TokenError as exc:
+        raise AuthError(f"Invalid refresh token: {exc}") from exc
+
+    # Explicit check: reject access tokens or tokens lacking the explicit refresh type
+    if payload.get("typ") != "refresh":
+        raise AuthError("Invalid token type: expected refresh token")
 
     subject = payload.get("sub")
     if not subject:
-        raise AuthError("Invalid token payload")
+        raise AuthError("Invalid token payload: missing sub claim")
 
     # try to load user (by id or email)
     user = None
@@ -129,6 +146,9 @@ async def refresh_token(refresh_token: str) -> auth_schemas.TokenResponse:
     if not user:
         raise AuthError("User not found for token")
 
+    if getattr(user, "is_active", True) is False:
+        raise AuthError("User is inactive")
+
     token_obj = await _create_token_response_for_user(user)
     return auth_schemas.TokenResponse(**token_obj)
 
@@ -137,10 +157,21 @@ async def get_user_from_token(token: str) -> t.Any:
     if not token:
         raise AuthError("Missing token")
 
-    payload = _decode_token(token)
+    try:
+        payload = jwt_core.decode_token(token)
+    except jwt_core.TokenError as exc:
+        raise AuthError(f"Invalid token: {exc}") from exc
+
+    # Reject refresh tokens used as bearer authorization
+    typ = payload.get("typ")
+    if typ == "refresh":
+        raise AuthError("Invalid token type: refresh token cannot be used for authorization")
+    if typ is not None and typ != "access":
+        raise AuthError(f"Invalid token type: expected access token, got '{typ}'")
+
     subject = payload.get("sub")
     if not subject:
-        raise AuthError("Invalid token payload")
+        raise AuthError("Invalid token payload: missing sub claim")
 
     user = None
     try:
@@ -159,9 +190,14 @@ async def get_current_user(token: str = Depends(oauth2_scheme)) -> t.Any:
     Raises HTTPException 401 when token invalid or user not found.
     """
     if not token:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated"
+        )
 
     try:
         return await get_user_from_token(token)
     except AuthError:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid authentication credentials")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid authentication credentials",
+        )
