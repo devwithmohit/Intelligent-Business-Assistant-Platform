@@ -26,43 +26,44 @@ class ChromaClient:
             logger.debug("chromadb import failed: %s", e)
             raise ChromaNotAvailable("chromadb package is not installed") from e
 
-        # determine settings from env or overrides
-        persist_dir = persist_directory or os.getenv("CHROMA_DIR")
+        persist_dir = persist_directory or os.getenv("CHROMA_DIR") or "./data/vector_db/chroma"
         server_host = os.getenv("CHROMA_SERVER_HOST") or os.getenv("CHROMA_HOST")
-        server_port = os.getenv("CHROMA_SERVER_PORT")
-        api_impl = None
-        cfg_kwargs: Dict[str, Any] = {}
+        server_port = os.getenv("CHROMA_SERVER_PORT") or os.getenv("CHROMA_PORT") or "8000"
+
+        self._Settings = Settings
+        self._client = None
 
         if server_host:
-            # REST server mode
-            api_impl = "rest"
-            cfg_kwargs["chroma_api_impl"] = api_impl
-            cfg_kwargs["chroma_server_host"] = server_host
-            if server_port:
-                try:
-                    cfg_kwargs["chroma_server_http_port"] = int(server_port)
-                except Exception:
-                    cfg_kwargs["chroma_server_http_port"] = server_port
-            # optional api key
-            api_key = os.getenv("CHROMA_API_KEY")
-            if api_key:
-                cfg_kwargs["chroma_server_host"] = server_host
-                cfg_kwargs["chroma_server_http_port"] = cfg_kwargs.get("chroma_server_http_port")
-                cfg_kwargs["chroma_api_key"] = api_key
-        else:
-            # default to embedded duckdb+parquet
-            cfg_kwargs["chroma_db_impl"] = "duckdb+parquet"
-            if persist_dir:
-                cfg_kwargs["persist_directory"] = persist_dir
+            try:
+                self._client = chromadb.HttpClient(
+                    host=server_host,
+                    port=int(server_port),
+                )
+                self._client.heartbeat()
+                logger.info("ChromaClient connected to HTTP server %s:%s", server_host, server_port)
+            except Exception as e:
+                logger.warning(
+                    "Unable to connect to Chroma HTTP server %s:%s (%s), falling back to PersistentClient",
+                    server_host,
+                    server_port,
+                    e,
+                )
+                self._client = None
 
-        # merge any explicit settings
-        if settings:
-            cfg_kwargs.update(settings)
+        if self._client is None:
+            try:
+                os.makedirs(persist_dir, exist_ok=True)
+                self._client = chromadb.PersistentClient(path=persist_dir)
+                logger.info("ChromaClient initialized with PersistentClient at %s", persist_dir)
+            except Exception as e:
+                logger.warning(
+                    "Failed to initialize PersistentClient at %s (%s), falling back to EphemeralClient",
+                    persist_dir,
+                    e,
+                )
+                self._client = chromadb.EphemeralClient()
 
-        self._Settings = Settings  # keep for possible introspection
-        self._client = chromadb.Client(Settings(**cfg_kwargs))
         self._closed = False
-        logger.debug("ChromaClient initialized settings=%s", cfg_kwargs)
 
     async def _run_blocking(self, fn, *args, **kwargs):
         return await asyncio.to_thread(lambda: fn(*args, **kwargs))
@@ -115,9 +116,12 @@ class ChromaClient:
         def _upsert():
             coll = None
             try:
-                coll = self._client.get_collection(collection_name)
+                coll = self._client.get_collection(collection_name, embedding_function=None)
             except Exception:
-                coll = self._client.create_collection(collection_name)
+                try:
+                    coll = self._client.create_collection(collection_name, embedding_function=None)
+                except Exception:
+                    coll = self._client.get_collection(collection_name)
             # chromadb's add/upsert API
             try:
                 coll.add(ids=ids, embeddings=embeddings, metadatas=metadatas, documents=documents)
@@ -145,9 +149,17 @@ class ChromaClient:
         """
         Query collection by embedding. Returns list of hits with id, distance, metadata, document.
         """
-        include = include or ["metadatas", "documents", "distances", "ids"]
+        # In ChromaDB, 'ids' are always returned in query results and are NOT allowed in include
+        include = include or ["metadatas", "documents", "distances"]
         def _query():
-            coll = self._client.get_collection(collection_name)
+            try:
+                coll = self._client.get_collection(collection_name, embedding_function=None)
+            except Exception:
+                try:
+                    coll = self._client.get_collection(collection_name)
+                except Exception:
+                    # Collection does not exist yet (e.g. user has no documents/memories)
+                    return []
             res = coll.query(query_embeddings=[query_embedding], n_results=n_results, include=include, where=where)
             # normalize into list of hits
             out: List[Dict[str, Any]] = []
@@ -176,6 +188,38 @@ class ChromaClient:
         self, collection_name: str, text_embedding: List[float], top_k: int = 5
     ) -> List[Dict[str, Any]]:
         return await self.query(collection_name, query_embedding=text_embedding, n_results=top_k)
+
+    async def delete(
+        self,
+        collection_name: str,
+        ids: Optional[List[str]] = None,
+        where: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        def _delete():
+            try:
+                coll = self._client.get_collection(collection_name)
+                kwargs = {}
+                if ids is not None:
+                    kwargs["ids"] = ids
+                if where is not None:
+                    kwargs["where"] = where
+                coll.delete(**kwargs)
+                return {"ok": True}
+            except Exception as e:
+                logger.debug("Chroma delete warning for %s: %s", collection_name, e)
+                return {"ok": False, "error": str(e)}
+
+        return await self._run_blocking(_delete)
+
+    async def count(self, collection_name: str) -> int:
+        def _count():
+            try:
+                coll = self._client.get_collection(collection_name)
+                return coll.count()
+            except Exception:
+                return 0
+
+        return await self._run_blocking(_count)
 
     async def persist(self) -> None:
         def _persist():

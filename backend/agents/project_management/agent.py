@@ -26,6 +26,7 @@ class ProjectManagementAgent(BaseAgent):
     ) -> List[Step]:
         safe_goal = sanitize_prompt(goal or "Create a project plan.")
         return [
+            {"type": "retrieve_knowledge", "payload": {"goal": safe_goal}},
             {
                 "type": "plan",
                 "payload": {"goal": safe_goal, "constraints": constraints or {}},
@@ -37,10 +38,25 @@ class ProjectManagementAgent(BaseAgent):
         step_type = step.get("type")
         payload = step.get("payload", {}) or {}
 
+        if step_type == "retrieve_knowledge":
+            goal = payload.get("goal", "")
+            knowledge_hits = await self.query_knowledge(query=goal, top_k=3)
+            await self.remember("retrieved_knowledge", {"hits": knowledge_hits})
+            return {"knowledge_hits": knowledge_hits}
+
         if step_type == "plan":
+            knowledge_mem = await self.recall("retrieved_knowledge", limit=1)
+            knowledge_context = ""
+            if knowledge_mem and isinstance(knowledge_mem, list) and knowledge_mem[0].get("value"):
+                hits = knowledge_mem[0]["value"].get("hits", [])
+                if hits:
+                    lines = [f"- [{h.get('title', 'SOP/Roadmap')}]: {h.get('content', '')}" for h in hits]
+                    knowledge_context = f"\nRelevant Project SOP & Historical Knowledge:\n" + "\n".join(lines) + "\n"
+
             prompt = (
                 f"Goal: {payload.get('goal', '')}\n"
-                f"Constraints: {payload.get('constraints', {})}\n\n"
+                f"Constraints: {payload.get('constraints', {})}\n"
+                f"{knowledge_context}\n"
                 "Create a prioritized task plan with owners, dependencies, and milestones."
             )
             plan_text = await self.llm_generate(

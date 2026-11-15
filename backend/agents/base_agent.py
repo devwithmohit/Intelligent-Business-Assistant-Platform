@@ -30,6 +30,7 @@ class BaseAgent(ABC):
         self.id = str(uuid.uuid4())
         self.name = name
         self.config = config or {}
+        self.user_id = (config or {}).get("user_id")
         self._running = False
         self._cancel_event = asyncio.Event()
         self.tools = (
@@ -72,6 +73,8 @@ class BaseAgent(ABC):
         """
         # attach workflow instance if provided
         wf_id = kwargs.get("workflow_instance_id") or kwargs.get("instance_id")
+        if "user_id" in kwargs and kwargs["user_id"] is not None:
+            self.user_id = kwargs["user_id"]
         if wf_id:
             self.attach_workflow(wf_id)
 
@@ -182,10 +185,46 @@ class BaseAgent(ABC):
         try:
             if hasattr(self.memory, "store_memory"):
                 await self.memory.store_memory(
-                    agent_id=self.id, key=key, value=value, metadata=metadata or {}
+                    agent_id=self.id,
+                    key=key,
+                    value=value,
+                    metadata=metadata or {},
+                    user_id=self.user_id,
                 )
         except Exception:
             logger.exception("Memory store failed for agent=%s key=%s", self.id, key)
+
+    async def query_knowledge(
+        self,
+        query: str,
+        user_id: Optional[int] = None,
+        top_k: int = 3,
+        document_id: Optional[int] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        Query tenant knowledge base via RAG retrieval service.
+        Scopes to user_id (from argument, self.user_id, or config).
+        """
+        target_user_id = (
+            user_id
+            or getattr(self, "user_id", None)
+            or (self.config or {}).get("user_id")
+        )
+        if not target_user_id:
+            logger.debug("No user_id found on agent %s; skipping knowledge query", self.name)
+            return []
+
+        try:
+            from ..services import rag_service
+            return await rag_service.retrieve_knowledge(
+                user_id=int(target_user_id),
+                query=query,
+                top_k=top_k,
+                document_id=document_id,
+            )
+        except Exception as exc:
+            logger.warning("Agent knowledge retrieval failed: %s", exc)
+            return []
 
     async def call_tool(self, tool_name: str, *args, **kwargs) -> Any:
         """

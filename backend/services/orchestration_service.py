@@ -140,11 +140,14 @@ class OrchestrationService:
         input_text: str,
         context: Optional[dict[str, Any]] = None,
         conversation_id: Optional[int] = None,
+        user_id: Optional[int] = None,
     ) -> dict[str, Any]:
         context = context or {}
         payload: dict[str, Any] = {"context": context}
         if conversation_id is not None:
             payload["conversation_id"] = conversation_id
+        if user_id is not None:
+            payload["user_id"] = user_id
 
         if agent_type == "customer_service":
             payload["customer_message"] = input_text
@@ -228,13 +231,14 @@ class OrchestrationService:
         runtime = await self.agent_service.create_agent(
             agent_type=agent_type,
             name=self._default_agent_name(agent_type),
-            config={"agent_type": agent_type},
+            config={"agent_type": agent_type, "user_id": user_id},
         )
         payload = self._build_agent_payload(
             agent_type=agent_type,
             input_text=input_text,
             context=context,
             conversation_id=conversation_id,
+            user_id=user_id,
         )
         started_at = datetime.now(timezone.utc)
         try:

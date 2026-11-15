@@ -31,9 +31,10 @@ class SalesResearchAgent(BaseAgent):
     def __init__(self, name: str = "sales_research", config: Optional[Dict[str, Any]] = None):
         super().__init__(name=name, config=config)
 
-    async def _plan(self, query: str, limit: int = 10, outreach_tone: str = "friendly") -> List[Step]:
+    async def _plan(self, query: str = "", limit: int = 10, outreach_tone: str = "friendly", **kwargs) -> List[Step]:
         q = sanitize_prompt(query or "")
         return [
+            {"type": "retrieve_knowledge", "payload": {"query": q}},
             {"type": "search", "payload": {"query": q, "limit": limit}},
             {"type": "enrich", "payload": {}},
             {"type": "draft_outreach", "payload": {"tone": outreach_tone}},
@@ -42,6 +43,12 @@ class SalesResearchAgent(BaseAgent):
     async def _execute_step(self, step: Step, **kwargs) -> Any:
         t = step.get("type")
         payload = step.get("payload", {}) or {}
+
+        if t == "retrieve_knowledge":
+            query = payload.get("query", "")
+            knowledge_hits = await self.query_knowledge(query=query, top_k=3)
+            await self.remember(key="retrieved_knowledge", value={"hits": knowledge_hits})
+            return {"knowledge_hits": knowledge_hits}
 
         if t == "search":
             query = payload.get("query", "")
@@ -100,6 +107,16 @@ class SalesResearchAgent(BaseAgent):
             # load enriched prospects
             mem = await self.recall("enriched_prospects", limit=1)
             prospects = mem[0]["items"] if mem and isinstance(mem[0], dict) and mem[0].get("items") else []
+
+            # Retrieve knowledge context for sales pitch
+            knowledge_mem = await self.recall("retrieved_knowledge", limit=1)
+            knowledge_context = ""
+            if knowledge_mem and isinstance(knowledge_mem, list) and knowledge_mem[0].get("value"):
+                hits = knowledge_mem[0]["value"].get("hits", [])
+                if hits:
+                    lines = [f"- [{h.get('title', 'Collateral')}]: {h.get('content', '')}" for h in hits]
+                    knowledge_context = f"\nRelevant Product & Case Study Knowledge:\n" + "\n".join(lines) + "\n"
+
             drafts = []
 
             for p in prospects:
@@ -109,10 +126,17 @@ class SalesResearchAgent(BaseAgent):
                 # Build safe prompt
                 prompt_tpl = (
                     "Write a {tone} personalized outreach email of 3-4 sentences to {name} at {company}.\n\n"
-                    "Context / pain points: {pain}\n\n"
+                    "Context / pain points: {pain}\n{knowledge_context}\n"
                     "Keep it concise, include a single clear CTA, and a one-line subject suggestion.\n\n"
                 )
-                prompt = apply_prompt_template(prompt_tpl, tone=tone, name=name, company=company or "their company", pain=pain or "no additional context")
+                prompt = apply_prompt_template(
+                    prompt_tpl,
+                    tone=tone,
+                    name=name,
+                    company=company or "their company",
+                    pain=pain or "no additional context",
+                    knowledge_context=knowledge_context,
+                )
                 prompt = sanitize_prompt(prompt)
                 if not is_safe_prompt(prompt):
                     logger.warning("Blocked unsafe prompt for outreach to %s", name)

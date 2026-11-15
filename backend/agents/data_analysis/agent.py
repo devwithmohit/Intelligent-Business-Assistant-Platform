@@ -26,6 +26,7 @@ class DataAnalysisAgent(BaseAgent):
     ) -> List[Step]:
         prompt = sanitize_prompt(question or "Analyze the provided business dataset.")
         return [
+            {"type": "retrieve_knowledge", "payload": {"question": prompt}},
             {"type": "analyze", "payload": {"dataset": dataset or [], "question": prompt}},
             {"type": "summarize", "payload": {"question": prompt}},
         ]
@@ -34,11 +35,27 @@ class DataAnalysisAgent(BaseAgent):
         step_type = step.get("type")
         payload = step.get("payload", {}) or {}
 
+        if step_type == "retrieve_knowledge":
+            question = payload.get("question", "")
+            knowledge_hits = await self.query_knowledge(query=question, top_k=3)
+            await self.remember("retrieved_knowledge", {"hits": knowledge_hits})
+            return {"knowledge_hits": knowledge_hits}
+
         if step_type == "analyze":
             dataset = payload.get("dataset", [])
             question = payload.get("question", "Analyze the dataset.")
+
+            knowledge_mem = await self.recall("retrieved_knowledge", limit=1)
+            knowledge_context = ""
+            if knowledge_mem and isinstance(knowledge_mem, list) and knowledge_mem[0].get("value"):
+                hits = knowledge_mem[0]["value"].get("hits", [])
+                if hits:
+                    lines = [f"- [{h.get('title', 'Schema/Metric Doc')}]: {h.get('content', '')}" for h in hits]
+                    knowledge_context = f"Relevant Domain & Metric Knowledge:\n" + "\n".join(lines) + "\n\n"
+
             prompt = (
                 f"Question: {question}\n\n"
+                f"{knowledge_context}"
                 f"Dataset:\n{dataset}\n\n"
                 "Return key findings, anomalies, and recommended business actions."
             )

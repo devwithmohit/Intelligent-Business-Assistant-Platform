@@ -36,8 +36,10 @@ Base = declarative_base()
 
 def import_models() -> None:
     """Import ORM modules so Base.metadata contains the full model graph."""
-
-    from .. import models  # noqa: F401
+    try:
+        from .. import models  # noqa: F401
+    except (ImportError, ValueError):
+        import backend.models  # noqa: F401
 
 
 def get_db() -> Generator[Session, None, None]:

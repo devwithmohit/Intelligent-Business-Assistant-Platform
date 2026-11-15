@@ -21,13 +21,14 @@ class CustomerServiceAgent(BaseAgent):
     def __init__(self, name: str = "customer_service", config: Optional[Dict[str, Any]] = None):
         super().__init__(name=name, config=config)
 
-    async def _plan(self, customer_message: str, customer_id: Optional[str] = None, priority: str = "normal") -> List[Step]:
+    async def _plan(self, customer_message: str = "", customer_id: Optional[str] = None, priority: str = "normal", **kwargs) -> List[Step]:
         """
         Create a small, deterministic plan from input.
         Expect: customer_message (raw), optional customer_id and priority.
         """
         message = sanitize_prompt(customer_message or "")
         return [
+            {"type": "retrieve_knowledge", "payload": {"query": message}},
             {"type": "summarize", "payload": {"message": message}},
             {"type": "create_ticket", "payload": {"customer_id": customer_id, "priority": priority}},
             {"type": "draft_response", "payload": {"message": message}},
@@ -36,6 +37,12 @@ class CustomerServiceAgent(BaseAgent):
     async def _execute_step(self, step: Step, **kwargs) -> Any:
         t = step.get("type")
         payload = step.get("payload", {}) or {}
+
+        if t == "retrieve_knowledge":
+            query = payload.get("query", "")
+            knowledge_hits = await self.query_knowledge(query=query, top_k=3)
+            await self.remember(key="retrieved_knowledge", value={"hits": knowledge_hits})
+            return {"knowledge_hits": knowledge_hits}
 
         if t == "summarize":
             message = payload.get("message", "")
@@ -85,12 +92,21 @@ class CustomerServiceAgent(BaseAgent):
                 logger.warning("Blocked unsafe customer message during draft_response")
                 return {"response": "", "note": "blocked unsafe content"}
 
+            # Inject retrieved knowledge base context
+            knowledge_mem = await self.recall("retrieved_knowledge", limit=1)
+            knowledge_context = ""
+            if knowledge_mem and isinstance(knowledge_mem, list) and knowledge_mem[0].get("value"):
+                hits = knowledge_mem[0]["value"].get("hits", [])
+                if hits:
+                    lines = [f"- [{h.get('title', 'Document')}]: {h.get('content', '')}" for h in hits]
+                    knowledge_context = f"\n\nRelevant Knowledge Base Information:\n" + "\n".join(lines) + "\n"
+
             prompt_tpl = (
-                "You are a professional, empathetic customer support agent. Given the customer message below, "
-                "draft a concise (2-4 sentences) helpful response that addresses the customer's needs and suggests next steps.\n\n"
+                "You are a professional, empathetic customer support agent. Given the customer message and company knowledge below, "
+                "draft a concise (2-4 sentences) helpful response that addresses the customer's needs and suggests next steps.{knowledge_context}\n\n"
                 "Customer message:\n{message}"
             )
-            prompt = apply_prompt_template(prompt_tpl, message=message)
+            prompt = apply_prompt_template(prompt_tpl, message=message, knowledge_context=knowledge_context)
             req = LLMRequest(task="chat", prompt=prompt, params={"temperature": 0.2, "max_tokens": 400})
             try:
                 resp = await self.llm.generate(req)

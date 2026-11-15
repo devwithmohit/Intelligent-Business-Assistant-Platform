@@ -21,9 +21,10 @@ class ContentCreationAgent(BaseAgent):
     def __init__(self, name: str = "content_creation", config: Optional[Dict[str, Any]] = None):
         super().__init__(name=name, config=config)
 
-    async def _plan(self, brief: str, tone: str = "neutral", target_audience: str = "general", length: str = "short") -> List[Step]:
+    async def _plan(self, brief: str = "", tone: str = "neutral", target_audience: str = "general", length: str = "short", **kwargs) -> List[Step]:
         b = sanitize_prompt(brief or "")
         return [
+            {"type": "retrieve_knowledge", "payload": {"query": b}},
             {"type": "generate_outline", "payload": {"brief": b, "tone": tone, "audience": target_audience, "length": length}},
             {"type": "generate_draft", "payload": {"length": length, "tone": tone}},
             {"type": "refine", "payload": {"instructions": "Make concise, improve clarity, fix grammar."}},
@@ -33,6 +34,12 @@ class ContentCreationAgent(BaseAgent):
         step_type = step.get("type")
         payload = step.get("payload", {}) or {}
 
+        if step_type == "retrieve_knowledge":
+            query = payload.get("query", "")
+            knowledge_hits = await self.query_knowledge(query=query, top_k=3)
+            await self.remember(key="retrieved_knowledge", value={"hits": knowledge_hits})
+            return {"knowledge_hits": knowledge_hits}
+
         if step_type == "generate_outline":
             brief = payload.get("brief", "")
             tone = payload.get("tone", "neutral")
@@ -40,11 +47,19 @@ class ContentCreationAgent(BaseAgent):
             if not brief:
                 return {"outline": [], "note": "empty brief"}
 
+            knowledge_mem = await self.recall("retrieved_knowledge", limit=1)
+            knowledge_context = ""
+            if knowledge_mem and isinstance(knowledge_mem, list) and knowledge_mem[0].get("value"):
+                hits = knowledge_mem[0]["value"].get("hits", [])
+                if hits:
+                    lines = [f"- [{h.get('title', 'Brand Doc')}]: {h.get('content', '')}" for h in hits]
+                    knowledge_context = f"\nRelevant Brand & Domain Knowledge:\n" + "\n".join(lines) + "\n"
+
             prompt_tpl = (
-                "You are a content writer. Given the brief below, produce a clear outline with 5-10 numbered sections. "
-                "Include short (1-2 sentence) notes describing each section.\n\nBrief:\n{brief}\n\nTone: {tone}\nAudience: {audience}\n\nOutline:"
+                "You are a content writer. Given the brief and background knowledge below, produce a clear outline with 5-10 numbered sections. "
+                "Include short (1-2 sentence) notes describing each section.{knowledge_context}\n\nBrief:\n{brief}\n\nTone: {tone}\nAudience: {audience}\n\nOutline:"
             )
-            prompt = apply_prompt_template(prompt_tpl, brief=brief, tone=tone, audience=audience)
+            prompt = apply_prompt_template(prompt_tpl, brief=brief, tone=tone, audience=audience, knowledge_context=knowledge_context)
             prompt = sanitize_prompt(prompt)
             if not is_safe_prompt(prompt):
                 logger.warning("Blocked unsafe brief for content creation")
