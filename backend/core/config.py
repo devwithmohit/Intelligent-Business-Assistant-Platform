@@ -7,6 +7,7 @@ from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _BACKEND_DIR = Path(__file__).resolve().parents[1]
+_DEFAULT_DATABASE_URL = f"sqlite:///{(_BACKEND_DIR.parent / 'data' / 'dev.db').as_posix()}"
 _DEFAULT_WORKFLOW_DIR = _BACKEND_DIR.parent / "data" / "workflows"
 _DEFAULT_WORKFLOW_STATE_DIR = _BACKEND_DIR.parent / "data" / "workflow_states"
 _DEFAULT_CHROMA_DIR = _BACKEND_DIR.parent / "data" / "vector_db" / "chroma"
@@ -26,7 +27,7 @@ class Settings(BaseSettings):
     ENV: str = "development"
     LOG_LEVEL: str = "INFO"
 
-    DATABASE_URL: str | None = None
+    DATABASE_URL: str = _DEFAULT_DATABASE_URL
 
     SECRET_KEY: str
     ALGORITHM: str = "HS256"

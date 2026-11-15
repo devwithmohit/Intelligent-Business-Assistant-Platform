@@ -12,6 +12,8 @@ if ROOT not in sys.path:
 
 from core import database  # uses database.engine and database.Base
 
+database.import_models()
+
 # this is the Alembic Config object, which provides access to the values in the .ini file.
 config = context.config
 

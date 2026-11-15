@@ -68,17 +68,10 @@ async def update_integration(name: str, payload: Dict[str, Any] = Body(...), man
 
 @router.delete("/{name}", summary="Delete an integration")
 async def delete_integration(name: str, manager: IntegrationManager = Depends(_manager)):
-    # remove stored config (best-effort)
     try:
-        cfg = await manager.get_config(name)
-        if cfg is None:
+        deleted = await manager.delete_integration(name)
+        if not deleted:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="integration not found")
-        # mutate internal store under lock
-        async with manager._lock:
-            manager._cfg.pop(name, None)
-            if name in manager._cfg:
-                # defensive: if still present fail
-                raise RuntimeError("failed to delete integration")
     except HTTPException:
         raise
     except Exception as exc:

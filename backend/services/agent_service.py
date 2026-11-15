@@ -134,6 +134,7 @@ class AgentService:
             agent = create_agent(
                 agent_type=agent_type, name=name or agent_type, config=config or {}
             )
+            setattr(agent, "agent_type", agent_type)
             self._agents[agent.id] = agent
             logger.info(
                 "AgentService created agent id=%s type=%s name=%s",
@@ -161,6 +162,7 @@ class AgentService:
                 {
                     "id": a.id,
                     "name": a.name,
+                    "agent_type": getattr(a, "agent_type", None),
                     "config": getattr(a, "config", {}),
                     "running": a.is_running(),
                 }
@@ -198,6 +200,12 @@ class AgentService:
             start_ts = time.time()
             try:
                 res = await agent.run(**(payload or {}))
+                duration_ms = int((time.time() - start_ts) * 1000)
+                if hasattr(res, "data"):
+                    data = getattr(res, "data", {}) or {}
+                    if isinstance(data, dict):
+                        data["duration_ms"] = duration_ms
+                        setattr(res, "data", data)
                 return res
             finally:
                 duration = time.time() - start_ts
@@ -419,6 +427,13 @@ class AgentService:
             return available_agent_types()
         except Exception:
             return []
+
+    def get_agents_by_type(self, agent_type: str) -> List[BaseAgent]:
+        return [
+            agent
+            for agent in self._agents.values()
+            if getattr(agent, "agent_type", None) == agent_type
+        ]
 
     # convenience singleton accessor
 

@@ -1,6 +1,7 @@
 import React, { createContext, useState, useEffect, useCallback } from "react";
+
 import * as authService from "../services/auth";
-import { jwtDecode } from "jwt-decode";
+
 export const AuthContext = createContext({
   user: null,
   loading: true,
@@ -14,66 +15,52 @@ export const AuthProvider = ({ children }) => {
   const [loading, setLoading] = useState(true);
 
   const setSession = useCallback((token) => {
-    if (token) {
-      localStorage.setItem("access_token", token);
-    } else {
-      localStorage.removeItem("access_token");
-    }
+    authService.setAuthToken(token ?? null);
   }, []);
 
   useEffect(() => {
+    let active = true;
+
     const init = async () => {
       setLoading(true);
       try {
-        const token = localStorage.getItem("access_token");
+        const token = authService.readStoredToken();
         if (token) {
-          try {
-            const decoded = jwtDecode(token);
-            // decoded may contain user info or only claims; adapt as needed
-            setUser(decoded.user ?? decoded);
-          } catch {
-            // fallback: try to fetch current user if backend provides endpoint
-            if (authService.getCurrentUser) {
-              const me = await authService.getCurrentUser();
-              setUser(me);
-            } else {
-              setUser(null);
-            }
+          const me = await authService.getCurrentUser();
+          if (active) {
+            setUser(me);
           }
         } else {
-          setUser(null);
+          if (active) {
+            setUser(null);
+          }
         }
       } catch (err) {
         console.error("Auth init error:", err);
-        setUser(null);
+        if (active) {
+          setUser(null);
+        }
       } finally {
-        setLoading(false);
+        if (active) {
+          setLoading(false);
+        }
       }
     };
 
     init();
+    return () => {
+      active = false;
+    };
   }, []);
 
   const login = async (creds) => {
     setLoading(true);
     try {
       const res = await authService.login(creds);
-      // handle different response shapes
-      const token = res?.access_token ?? res?.token ?? res;
+      const token = res?.access_token ?? null;
       if (!token) throw new Error("No token returned from login");
       setSession(token);
-
-      // set user from response if available, otherwise decode token
-      if (res?.user) setUser(res.user);
-      else {
-        try {
-          const decoded = jwtDecode(token);
-          setUser(decoded.user ?? decoded);
-        } catch {
-          setUser(null);
-        }
-      }
-
+      setUser(res?.user ?? (await authService.getCurrentUser()));
       return res;
     } finally {
       setLoading(false);
@@ -84,18 +71,10 @@ export const AuthProvider = ({ children }) => {
     setLoading(true);
     try {
       const res = await authService.signup(payload);
-      const token = res?.access_token ?? res?.token ?? res;
+      const token = res?.access_token ?? null;
       if (token) {
         setSession(token);
-        if (res?.user) setUser(res.user);
-        else {
-          try {
-            const decoded = jwtDecode(token);
-            setUser(decoded.user ?? decoded);
-          } catch {
-            setUser(null);
-          }
-        }
+        setUser(res?.user ?? (await authService.getCurrentUser()));
       }
       return res;
     } finally {
@@ -106,7 +85,7 @@ export const AuthProvider = ({ children }) => {
   const logout = () => {
     setSession(null);
     setUser(null);
-    if (authService.logout) authService.logout().catch(() => {});
+    authService.logout().catch(() => {});
   };
 
   return (

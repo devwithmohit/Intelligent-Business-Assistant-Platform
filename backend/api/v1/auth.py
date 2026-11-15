@@ -1,6 +1,6 @@
 from typing import Optional
 
-from fastapi import APIRouter, Body, HTTPException, Request, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Request, status
 
 from ...services import auth_service
 from ...schemas import auth_schemas, user_schemas

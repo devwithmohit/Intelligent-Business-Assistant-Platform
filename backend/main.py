@@ -11,6 +11,7 @@ from .api.v1 import integrations as integrations_router
 from .api.v1 import tasks as tasks_router
 from .api.v1 import users as users_router
 from .api.v1 import workflows as workflows_router
+from .api import websocket as websocket_router
 from .core.config import settings
 from .core.logging_config import configure_logging
 from .middleware.logging_middleware import LoggingMiddleware
@@ -64,6 +65,7 @@ for router_module in (
     integrations_router,
     tasks_router,
     workflows_router,
+    websocket_router,
 ):
     _include_router(router_module)
 

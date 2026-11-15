@@ -133,6 +133,26 @@ async def refresh_token(refresh_token: str) -> auth_schemas.TokenResponse:
     return auth_schemas.TokenResponse(**token_obj)
 
 
+async def get_user_from_token(token: str) -> t.Any:
+    if not token:
+        raise AuthError("Missing token")
+
+    payload = _decode_token(token)
+    subject = payload.get("sub")
+    if not subject:
+        raise AuthError("Invalid token payload")
+
+    user = None
+    try:
+        user = await user_service.get_user_by_id(int(subject))
+    except Exception:
+        user = await user_service.get_user_by_email(subject)
+
+    if not user:
+        raise AuthError("User not found")
+    return user
+
+
 async def get_current_user(token: str = Depends(oauth2_scheme)) -> t.Any:
     """
     Dependency to return current user from access token.
@@ -142,21 +162,6 @@ async def get_current_user(token: str = Depends(oauth2_scheme)) -> t.Any:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
 
     try:
-        payload = _decode_token(token)
+        return await get_user_from_token(token)
     except AuthError:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid authentication credentials")
-
-    subject = payload.get("sub")
-    if not subject:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token payload")
-
-    # attempt to fetch by id first
-    user = None
-    try:
-        user = await user_service.get_user_by_id(int(subject))
-    except Exception:
-        user = await user_service.get_user_by_email(subject)
-
-    if not user:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
-    return user

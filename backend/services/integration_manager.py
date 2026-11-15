@@ -8,6 +8,8 @@ from ..integrations.storage.storage_service import get_storage_service
 from ..integrations.crm.crm_sync_service import get_crm_sync_service
 from ..integrations.messaging.notification_service import get_notification_service
 from ..services.kb_manager import get_kb_manager
+from ..core import database
+from ..models.integration_models import Integration
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +29,58 @@ class IntegrationManager:
     def __init__(self) -> None:
         self._cfg: Dict[str, Dict[str, Any]] = {}
         self._lock = asyncio.Lock()
+        self._load_from_db()
+
+    def _load_from_db(self) -> None:
+        db = database.SessionLocal()
+        try:
+            integrations = db.query(Integration).all()
+            for integration in integrations:
+                payload = dict(integration.config or {})
+                payload.setdefault("name", integration.name)
+                payload.setdefault("type", integration.type)
+                payload.setdefault("enabled", integration.enabled)
+                self._cfg[integration.name] = payload
+        except Exception:
+            logger.exception("Failed to load integrations from database")
+        finally:
+            db.close()
+
+    def _persist_integration(self, name: str, cfg: Dict[str, Any]) -> None:
+        db = database.SessionLocal()
+        try:
+            record = db.query(Integration).filter(Integration.name == name).first()
+            if record is None:
+                record = Integration(
+                    name=name,
+                    type=(cfg or {}).get("type", "custom"),
+                    enabled=(cfg or {}).get("enabled", True),
+                    config=cfg or {},
+                )
+                db.add(record)
+            else:
+                record.type = (cfg or {}).get("type", record.type)
+                record.enabled = (cfg or {}).get("enabled", record.enabled)
+                record.config = cfg or {}
+            db.commit()
+        except Exception:
+            db.rollback()
+            raise
+        finally:
+            db.close()
+
+    def _delete_persisted_integration(self, name: str) -> None:
+        db = database.SessionLocal()
+        try:
+            record = db.query(Integration).filter(Integration.name == name).first()
+            if record is not None:
+                db.delete(record)
+                db.commit()
+        except Exception:
+            db.rollback()
+            raise
+        finally:
+            db.close()
 
     async def register_integration(self, name: str, cfg: Dict[str, Any]) -> None:
         """
@@ -34,6 +88,11 @@ class IntegrationManager:
         """
         async with self._lock:
             self._cfg[name] = cfg or {}
+            try:
+                await asyncio.to_thread(self._persist_integration, name, self._cfg[name])
+            except Exception as exc:
+                logger.exception("Failed to persist integration %s", name)
+                raise IntegrationManagerError(str(exc)) from exc
             provider = (cfg or {}).get("type", "").lower()
             try:
                 if provider == "gmail" or provider in ("outlook", "exchange", "ews"):
@@ -79,6 +138,18 @@ class IntegrationManager:
     async def list_integrations(self) -> Dict[str, Dict[str, Any]]:
         async with self._lock:
             return dict(self._cfg)
+
+    async def delete_integration(self, name: str) -> bool:
+        async with self._lock:
+            existing = self._cfg.pop(name, None)
+            if existing is None:
+                return False
+            try:
+                await asyncio.to_thread(self._delete_persisted_integration, name)
+            except Exception as exc:
+                logger.exception("Failed to delete integration %s", name)
+                raise IntegrationManagerError(str(exc)) from exc
+            return True
 
     async def get_handler(self, name: str) -> Any:
         """

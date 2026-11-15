@@ -3,13 +3,18 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from ...schemas import orchestration_schemas as schemas
+from ...services import auth_service
 from ...services.workflow_service import (
     WorkflowService,
     WorkflowServiceError,
     get_workflow_service,
 )
 
-router = APIRouter(prefix="/api/v1/workflows", tags=["workflows"])
+router = APIRouter(
+    prefix="/api/v1/workflows",
+    tags=["workflows"],
+    dependencies=[Depends(auth_service.get_current_user)],
+)
 
 
 def _svc() -> WorkflowService:

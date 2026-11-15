@@ -2,9 +2,6 @@ import asyncio
 from typing import Any, Dict, List, Optional
 
 import pytest
-from fastapi.testclient import TestClient
-
-from backend.main import app
 from backend.services import integration_manager as im
 
 
@@ -81,24 +78,21 @@ async def test_unknown_provider_is_stored_but_no_service_called(monkeypatch):
     assert stored is not None
     assert stored["type"] == "some_obscure_provider"
 
-
-def test_api_create_and_delete_integration_endpoints():
-    # Use real FastAPI app router to exercise endpoints
-    client = TestClient(app)
+def test_api_create_and_delete_integration_endpoints(client, auth_headers):
     # create
     payload = {"name": "api_integ", "type": "gmail", "extra": {"x": 1}}
-    resp = client.post("/api/v1/integrations/", json=payload)
+    resp = client.post("/api/v1/integrations/", json=payload, headers=auth_headers)
     assert resp.status_code == 201
     body = resp.json()
     assert body["name"] == "api_integ"
     assert body["config"]["name"] == "api_integ"
     # get
-    resp = client.get("/api/v1/integrations/api_integ")
+    resp = client.get("/api/v1/integrations/api_integ", headers=auth_headers)
     assert resp.status_code == 200
     # delete
-    resp = client.delete("/api/v1/integrations/api_integ")
+    resp = client.delete("/api/v1/integrations/api_integ", headers=auth_headers)
     assert resp.status_code == 200
     assert resp.json().get("deleted") is True
     # subsequent get returns 404
-    resp = client.get("/api/v1/integrations/api_integ")
+    resp = client.get("/api/v1/integrations/api_integ", headers=auth_headers)
     assert resp.status_code == 404

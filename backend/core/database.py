@@ -34,6 +34,12 @@ SessionLocal: sessionmaker = sessionmaker(
 Base = declarative_base()
 
 
+def import_models() -> None:
+    """Import ORM modules so Base.metadata contains the full model graph."""
+
+    from .. import models  # noqa: F401
+
+
 def get_db() -> Generator[Session, None, None]:
     """
     FastAPI dependency that yields a DB session and ensures it's closed afterwards.
@@ -50,4 +56,5 @@ def get_db() -> Generator[Session, None, None]:
 
 def init_db(create_tables: bool = False) -> None:
     if create_tables:
+        import_models()
         Base.metadata.create_all(bind=engine)

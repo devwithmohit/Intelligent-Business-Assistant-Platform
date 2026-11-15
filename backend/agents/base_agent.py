@@ -33,8 +33,8 @@ class BaseAgent(ABC):
         self._running = False
         self._cancel_event = asyncio.Event()
         self.tools = (
-            tool_service.ToolRegistry()
-            if hasattr(tool_service, "ToolRegistry")
+            tool_service.get_tool_registry()
+            if hasattr(tool_service, "get_tool_registry")
             else tool_service
         )
         # memory_service expected to expose get_memory / store_memory helpers

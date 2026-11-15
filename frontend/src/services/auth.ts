@@ -1,89 +1,94 @@
-import api from "./api";
+import api, { setAuthToken as setApiAuthToken } from "./api";
 
 const TOKEN_KEY = "access_token";
 
-function setAuthToken(token) {
-  if (!api || !api.defaults) return;
-  if (token) {
-    api.defaults.headers.common["Authorization"] = `Bearer ${token}`;
-  } else {
-    delete api.defaults.headers.common["Authorization"];
-  }
-}
+export type AuthUser = {
+  id: number;
+  email: string;
+  name?: string | null;
+  is_active?: boolean;
+  is_admin?: boolean;
+};
 
-function readStoredToken() {
-  return localStorage.getItem(TOKEN_KEY);
-}
+export type AuthResponse = {
+  access_token: string;
+  token_type: string;
+  refresh_token?: string;
+  expires_in?: number;
+  user?: AuthUser;
+};
 
-async function login({ email, password }) {
+type LoginPayload = {
+  email: string;
+  password: string;
+};
+
+type SignupPayload = {
+  email: string;
+  password: string;
+  name?: string;
+};
+
+const extractErrorMessage = (error: any, fallback: string) =>
+  error?.response?.data?.detail ||
+  error?.response?.data?.message ||
+  error?.message ||
+  fallback;
+
+export const readStoredToken = (): string | null => localStorage.getItem(TOKEN_KEY);
+
+export const setAuthToken = (token: string | null): void => {
+  setApiAuthToken(token);
+};
+
+export const login = async (payload: LoginPayload): Promise<AuthResponse> => {
   try {
-    const res = await api.post("/api/v1/auth/login", { email, password });
-    const data = res.data ?? res;
-    const token = data?.access_token ?? data?.token ?? null;
-    if (token) {
-      localStorage.setItem(TOKEN_KEY, token);
-      setAuthToken(token);
+    const response = await api.post("/api/v1/auth/login", payload);
+    const data: AuthResponse = response.data;
+    if (data?.access_token) {
+      setAuthToken(data.access_token);
     }
     return data;
-  } catch (err) {
-    const message = err?.response?.data?.detail || err?.response?.data?.message || err.message || "Login failed";
-    throw new Error(message);
+  } catch (error) {
+    throw new Error(extractErrorMessage(error, "Login failed"));
   }
-}
+};
 
-async function signup(payload) {
+export const signup = async (payload: SignupPayload): Promise<AuthResponse> => {
   try {
-    // try common register endpoints
-    const endpoint = "/api/v1/auth/register";
-    const res = await api.post(endpoint, payload);
-    const data = res.data ?? res;
-    const token = data?.access_token ?? data?.token ?? null;
-    if (token) {
-      localStorage.setItem(TOKEN_KEY, token);
-      setAuthToken(token);
+    const response = await api.post("/api/v1/auth/register", payload);
+    const data: AuthResponse = response.data;
+    if (data?.access_token) {
+      setAuthToken(data.access_token);
     }
     return data;
-  } catch (err) {
-    const message = err?.response?.data?.detail || err?.response?.data?.message || err.message || "Signup failed";
-    throw new Error(message);
+  } catch (error) {
+    throw new Error(extractErrorMessage(error, "Signup failed"));
   }
-}
+};
 
-async function logout() {
-  try {
-    // attempt server logout but don't block on failure
-    try {
-      await api.post("/api/v1/auth/logout");
-    } catch (_) {
-      // ignore
-    }
-  } finally {
-    localStorage.removeItem(TOKEN_KEY);
-    setAuthToken(null);
-  }
-}
+export const logout = async (): Promise<void> => {
+  setAuthToken(null);
+};
 
-async function getCurrentUser() {
+export const getCurrentUser = async (): Promise<AuthUser | null> => {
   const token = readStoredToken();
-  if (!token) return null;
+  if (!token) {
+    return null;
+  }
+
   setAuthToken(token);
   try {
-    const res = await api.get("/api/v1/auth/me");
-    return res.data ?? res;
-  } catch (err) {
-    // try alternate endpoint
-    try {
-      const res2 = await api.get("/api/v1/me");
-      return res2.data ?? res2;
-    } catch {
-      return null;
-    }
+    const response = await api.get("/api/v1/auth/me");
+    return response.data ?? null;
+  } catch (error) {
+    setAuthToken(null);
+    return null;
   }
+};
+
+if (readStoredToken()) {
+  setAuthToken(readStoredToken());
 }
 
-// ensure axios instance has token if stored
-const stored = readStoredToken();
-if (stored) setAuthToken(stored);
-
-export { login, signup, logout, getCurrentUser, setAuthToken };
-export default { login, signup, logout, getCurrentUser, setAuthToken };
+export default { login, signup, logout, getCurrentUser, setAuthToken, readStoredToken };
