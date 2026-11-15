@@ -37,6 +37,11 @@ class Agent(Base):
     )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+    )
     type: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     status: Mapped[str] = mapped_column(
@@ -63,4 +68,9 @@ class Agent(Base):
         onupdate=func.now(),
     )
 
-    creator: Mapped["User | None"] = relationship(back_populates="agents")
+    creator: Mapped["User | None"] = relationship(
+        "User", back_populates="created_agents", foreign_keys=[created_by]
+    )
+    user: Mapped["User | None"] = relationship(
+        "User", back_populates="agents", foreign_keys=[user_id]
+    )

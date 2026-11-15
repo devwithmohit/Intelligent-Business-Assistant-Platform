@@ -189,10 +189,13 @@ class OrchestrationService:
                     status=status,
                     config=config or {"agent_type": agent_type},
                     created_by=user_id,
+                    user_id=user_id,
                 )
                 db.add(agent)
             else:
                 agent.status = status
+                if user_id is not None:
+                    agent.user_id = user_id
                 if config is not None:
                     agent.config = config
             if last_run_at is not None:
@@ -275,7 +278,11 @@ class OrchestrationService:
         }
 
     async def list_agent_history(
-        self, agent_type: str, skip: int = 0, limit: int = 20
+        self,
+        agent_type: str,
+        user_id: Optional[int] = None,
+        skip: int = 0,
+        limit: int = 20,
     ) -> list[dict[str, Any]]:
         agents = self.agent_service.get_agents_by_type(agent_type)
         history: list[dict[str, Any]] = []
@@ -287,6 +294,11 @@ class OrchestrationService:
             )
             for record in records:
                 value = record.get("value", {}) or {}
+                payload_dict = value.get("payload", {}) or {}
+                # Filter by tenant user_id if requested
+                record_user = value.get("user_id") or payload_dict.get("user_id")
+                if user_id is not None and record_user is not None and record_user != user_id:
+                    continue
                 result = value.get("result", {}) or {}
                 data = result.get("data", {}) or {}
                 history.append(
@@ -294,7 +306,7 @@ class OrchestrationService:
                         "agent_id": value.get("agent_id", agent.id),
                         "agent_type": agent_type,
                         "timestamp": value.get("ts", record.get("ts")),
-                        "payload": value.get("payload", {}),
+                        "payload": payload_dict,
                         "success": result.get("success", False),
                         "output": result.get("output"),
                         "error": result.get("error"),
@@ -497,30 +509,40 @@ class OrchestrationService:
         )
         return {"reply": reply, "conversation_id": conversation["id"]}
 
-    def _sync_summary(self) -> dict[str, int]:
+    def _sync_summary(self, user_id: Optional[int] = None) -> dict[str, int]:
         db = self._session()
         try:
-            total_conversations = db.query(Conversation).count()
-            total_messages = db.query(Message).count()
-            agents_active = db.query(Agent).filter(Agent.status != "stopped").count()
+            query_conv = db.query(Conversation)
+            query_msg = db.query(Message).join(Conversation, Message.conversation_id == Conversation.id)
+            query_agents = db.query(Agent).filter(Agent.status != "stopped")
+
+            if user_id is not None:
+                query_conv = query_conv.filter(Conversation.user_id == user_id)
+                query_msg = query_msg.filter(Conversation.user_id == user_id)
+                query_agents = query_agents.filter(
+                    (Agent.user_id == user_id) | (Agent.created_by == user_id) | (Agent.user_id.is_(None))
+                )
+
             return {
-                "total_conversations": total_conversations,
-                "total_messages": total_messages,
-                "agents_active": agents_active,
+                "total_conversations": query_conv.count(),
+                "total_messages": query_msg.count(),
+                "agents_active": query_agents.count(),
             }
         finally:
             db.close()
 
-    async def get_summary(self) -> dict[str, int]:
+    async def get_summary(self, user_id: Optional[int] = None) -> dict[str, int]:
         await self.ensure_default_agents()
-        return await self._run_db(self._sync_summary)
+        return await self._run_db(self._sync_summary, user_id)
 
-    async def get_agent_metrics(self) -> list[dict[str, Any]]:
+    async def get_agent_metrics(self, user_id: Optional[int] = None) -> list[dict[str, Any]]:
         await self.ensure_default_agents()
-        status_rows = await self.list_agent_statuses()
+        status_rows = await self.list_agent_statuses(user_id=user_id)
         metrics: list[dict[str, Any]] = []
         for row in status_rows:
-            history = await self.list_agent_history(row["type"], skip=0, limit=100)
+            history = await self.list_agent_history(
+                row["type"], user_id=user_id, skip=0, limit=100
+            )
             runs = len(history)
             successes = sum(1 for item in history if item.get("success"))
             duration_values = [
@@ -544,24 +566,27 @@ class OrchestrationService:
             )
         return metrics
 
-    def _sync_usage(self) -> list[dict[str, Any]]:
+    def _sync_usage(self, user_id: Optional[int] = None) -> list[dict[str, Any]]:
         db = self._session()
         try:
+            conv_q = db.query(
+                func.date(Conversation.created_at).label("date"),
+                func.count(Conversation.id).label("conversations"),
+            )
+            msg_q = db.query(
+                func.date(Message.created_at).label("date"),
+                func.count(Message.id).label("messages"),
+            ).join(Conversation, Message.conversation_id == Conversation.id)
+
+            if user_id is not None:
+                conv_q = conv_q.filter(Conversation.user_id == user_id)
+                msg_q = msg_q.filter(Conversation.user_id == user_id)
+
             conversation_rows = (
-                db.query(
-                    func.date(Conversation.created_at).label("date"),
-                    func.count(Conversation.id).label("conversations"),
-                )
-                .group_by(func.date(Conversation.created_at))
-                .all()
+                conv_q.group_by(func.date(Conversation.created_at)).all()
             )
             message_rows = (
-                db.query(
-                    func.date(Message.created_at).label("date"),
-                    func.count(Message.id).label("messages"),
-                )
-                .group_by(func.date(Message.created_at))
-                .all()
+                msg_q.group_by(func.date(Message.created_at)).all()
             )
             usage_map: dict[str, dict[str, Any]] = {}
             for row in conversation_rows:
@@ -581,8 +606,8 @@ class OrchestrationService:
         finally:
             db.close()
 
-    async def get_usage(self) -> list[dict[str, Any]]:
-        return await self._run_db(self._sync_usage)
+    async def get_usage(self, user_id: Optional[int] = None) -> list[dict[str, Any]]:
+        return await self._run_db(self._sync_usage, user_id)
 
     def _validate_assignee(self, db: Session, assigned_to: Optional[int]) -> None:
         if assigned_to is None:

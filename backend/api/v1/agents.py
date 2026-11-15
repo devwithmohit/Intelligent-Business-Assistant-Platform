@@ -108,6 +108,8 @@ async def agent_history(
     service: OrchestrationService = Depends(_service),
 ):
     try:
-        return await service.list_agent_history(agent_type, skip=skip, limit=limit)
+        return await service.list_agent_history(
+            agent_type, user_id=current_user.id, skip=skip, limit=limit
+        )
     except OrchestrationServiceError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc

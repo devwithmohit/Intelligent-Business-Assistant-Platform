@@ -45,10 +45,13 @@ async def analytics_summary(
     current_user=Depends(auth_service.get_current_user),
     service: OrchestrationService = Depends(_service),
 ):
+    """Return analytics summary scoped to the authenticated tenant."""
     try:
-        return await service.get_summary()
+        return await service.get_summary(user_id=current_user.id)
     except OrchestrationServiceError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+        ) from exc
 
 
 @router.get("/agents", response_model=list[AgentAnalyticsRow])
@@ -56,7 +59,8 @@ async def analytics_agents(
     current_user=Depends(auth_service.get_current_user),
     service: OrchestrationService = Depends(_service),
 ):
-    return await service.get_agent_metrics()
+    """Return agent execution metrics scoped to the authenticated tenant."""
+    return await service.get_agent_metrics(user_id=current_user.id)
 
 
 @router.get("/usage", response_model=list[UsageRow])
@@ -64,4 +68,5 @@ async def analytics_usage(
     current_user=Depends(auth_service.get_current_user),
     service: OrchestrationService = Depends(_service),
 ):
-    return await service.get_usage()
+    """Return timeline usage analytics scoped to the authenticated tenant."""
+    return await service.get_usage(user_id=current_user.id)

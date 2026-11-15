@@ -1,21 +1,32 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import Boolean, DateTime, JSON, String, func, text
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy import Boolean, DateTime, ForeignKey, JSON, String, UniqueConstraint, func, text
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from ..core.database import Base
 
+if TYPE_CHECKING:
+    from .user_models import User
+
 
 class Integration(Base):
-    """Persisted integration configuration record."""
+    """Persisted integration configuration record scoped to a tenant/user."""
 
     __tablename__ = "integrations"
+    __table_args__ = (
+        UniqueConstraint("user_id", "name", name="uq_integrations_user_name"),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    name: Mapped[str] = mapped_column(String(255), unique=True, index=True, nullable=False)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    name: Mapped[str] = mapped_column(String(255), index=True, nullable=False)
     type: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     enabled: Mapped[bool] = mapped_column(
         Boolean,
@@ -35,3 +46,5 @@ class Integration(Base):
         server_default=func.now(),
         onupdate=func.now(),
     )
+
+    user: Mapped["User"] = relationship(back_populates="integrations")

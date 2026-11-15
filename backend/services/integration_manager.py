@@ -1,15 +1,18 @@
+from __future__ import annotations
+
 import asyncio
 import logging
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
-from ..integrations.email.email_service import get_email_service
-from ..integrations.calendar.calendar_service import get_calendar_service
-from ..integrations.storage.storage_service import get_storage_service
-from ..integrations.crm.crm_sync_service import get_crm_sync_service
-from ..integrations.messaging.notification_service import get_notification_service
-from ..services.kb_manager import get_kb_manager
 from ..core import database
+from ..core.encryption import decrypt_integration_config, encrypt_integration_config
+from ..integrations.calendar.calendar_service import get_calendar_service
+from ..integrations.crm.crm_sync_service import get_crm_sync_service
+from ..integrations.email.email_service import get_email_service
+from ..integrations.messaging.notification_service import get_notification_service
+from ..integrations.storage.storage_service import get_storage_service
 from ..models.integration_models import Integration
+from ..services.kb_manager import get_kb_manager
 
 logger = logging.getLogger(__name__)
 
@@ -18,16 +21,50 @@ class IntegrationManagerError(Exception):
     pass
 
 
+class TenantConfigDict(dict):
+    """
+    Dictionary that supports (user_id, name) compound keys while offering
+    graceful lookup and pop fallback by integration name for backwards compatibility.
+    """
+
+    def pop(self, key: Any, default: Any = None) -> Any:
+        if super().__contains__(key):
+            return super().pop(key)
+        if isinstance(key, str):
+            for k in list(self.keys()):
+                if isinstance(k, tuple) and len(k) == 2 and k[1] == key:
+                    return super().pop(k)
+        return default
+
+    def __contains__(self, key: Any) -> bool:
+        if super().__contains__(key):
+            return True
+        if isinstance(key, str):
+            return any(
+                isinstance(k, tuple) and len(k) == 2 and k[1] == key
+                for k in self.keys()
+            )
+        return False
+
+    def __getitem__(self, key: Any) -> Any:
+        if super().__contains__(key):
+            return super().__getitem__(key)
+        if isinstance(key, str):
+            for k, v in self.items():
+                if isinstance(k, tuple) and len(k) == 2 and k[1] == key:
+                    return v
+        raise KeyError(key)
+
+
 class IntegrationManager:
     """
-    Central registry for third-party integrations.
-    - store integration configs
-    - route registration to provider-specific service (email/calendar/storage/crm/messaging/kb)
-    - return the service handler for a named integration so callers can operate on it
+    Central registry for third-party integrations with multi-tenant isolation
+    and encrypted credential storage.
     """
 
     def __init__(self) -> None:
-        self._cfg: Dict[str, Dict[str, Any]] = {}
+        # Keyed by (user_id, integration_name)
+        self._cfg: TenantConfigDict = TenantConfigDict()
         self._lock = asyncio.Lock()
         self._load_from_db()
 
@@ -36,32 +73,41 @@ class IntegrationManager:
         try:
             integrations = db.query(Integration).all()
             for integration in integrations:
-                payload = dict(integration.config or {})
+                # Decrypt stored configuration envelope
+                payload = decrypt_integration_config(integration.config)
                 payload.setdefault("name", integration.name)
                 payload.setdefault("type", integration.type)
                 payload.setdefault("enabled", integration.enabled)
-                self._cfg[integration.name] = payload
+                payload.setdefault("user_id", integration.user_id)
+                self._cfg[(integration.user_id, integration.name)] = payload
         except Exception:
             logger.exception("Failed to load integrations from database")
         finally:
             db.close()
 
-    def _persist_integration(self, name: str, cfg: Dict[str, Any]) -> None:
+    def _persist_integration(self, name: str, cfg: Dict[str, Any], user_id: int) -> None:
         db = database.SessionLocal()
         try:
-            record = db.query(Integration).filter(Integration.name == name).first()
+            # Encrypt sensitive configuration before database insertion / update
+            encrypted_config = encrypt_integration_config(cfg)
+            record = (
+                db.query(Integration)
+                .filter(Integration.name == name, Integration.user_id == user_id)
+                .first()
+            )
             if record is None:
                 record = Integration(
+                    user_id=user_id,
                     name=name,
                     type=(cfg or {}).get("type", "custom"),
                     enabled=(cfg or {}).get("enabled", True),
-                    config=cfg or {},
+                    config=encrypted_config,
                 )
                 db.add(record)
             else:
                 record.type = (cfg or {}).get("type", record.type)
                 record.enabled = (cfg or {}).get("enabled", record.enabled)
-                record.config = cfg or {}
+                record.config = encrypted_config
             db.commit()
         except Exception:
             db.rollback()
@@ -69,10 +115,14 @@ class IntegrationManager:
         finally:
             db.close()
 
-    def _delete_persisted_integration(self, name: str) -> None:
+    def _delete_persisted_integration(self, name: str, user_id: int) -> None:
         db = database.SessionLocal()
         try:
-            record = db.query(Integration).filter(Integration.name == name).first()
+            record = (
+                db.query(Integration)
+                .filter(Integration.name == name, Integration.user_id == user_id)
+                .first()
+            )
             if record is not None:
                 db.delete(record)
                 db.commit()
@@ -82,17 +132,28 @@ class IntegrationManager:
         finally:
             db.close()
 
-    async def register_integration(self, name: str, cfg: Dict[str, Any]) -> None:
+    async def register_integration(
+        self, name: str, cfg: Dict[str, Any], user_id: int = 1
+    ) -> None:
         """
-        Register or update an integration config. Routes to provider service register hooks when available.
+        Register or update a tenant-scoped integration config with credential encryption.
         """
         async with self._lock:
-            self._cfg[name] = cfg or {}
+            stored_cfg = dict(cfg or {})
+            stored_cfg["name"] = name
+            stored_cfg["user_id"] = user_id
+            self._cfg[(user_id, name)] = stored_cfg
+
             try:
-                await asyncio.to_thread(self._persist_integration, name, self._cfg[name])
+                await asyncio.to_thread(
+                    self._persist_integration, name, stored_cfg, user_id
+                )
             except Exception as exc:
-                logger.exception("Failed to persist integration %s", name)
+                logger.exception(
+                    "Failed to persist integration %s for user %s", name, user_id
+                )
                 raise IntegrationManagerError(str(exc)) from exc
+
             provider = (cfg or {}).get("type", "").lower()
             try:
                 if provider == "gmail" or provider in ("outlook", "exchange", "ews"):
@@ -117,48 +178,67 @@ class IntegrationManager:
                     svc = get_notification_service()
                     await svc.register_integration(name, cfg)
                 elif provider in ("kb", "chroma", "vector_db"):
-                    # KB manager uses kb_manager.add_documents / create_kb etc.
-                    # store config only; KB manager itself is not an "integration" in the same sense
                     pass
                 else:
-                    # unknown provider: still store config for custom handling
                     logger.debug(
-                        "register_integration: stored unknown provider type=%s name=%s",
+                        "register_integration: stored custom provider type=%s name=%s",
                         provider,
                         name,
                     )
             except Exception as exc:
-                logger.exception("register_integration failed for %s", name)
+                logger.exception("register_integration hook failed for %s", name)
                 raise IntegrationManagerError(str(exc)) from exc
 
-    async def get_config(self, name: str) -> Optional[Dict[str, Any]]:
+    async def get_config(
+        self, name: str, user_id: Optional[int] = None
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Retrieve decrypted configuration for an integration, scoped to a tenant user.
+        """
         async with self._lock:
-            return self._cfg.get(name)
+            if user_id is not None:
+                return self._cfg.get((user_id, name))
 
-    async def list_integrations(self) -> Dict[str, Dict[str, Any]]:
-        async with self._lock:
-            return dict(self._cfg)
+            # System fallback search across all tenants
+            for (uid, n), cfg in self._cfg.items():
+                if n == name:
+                    return cfg
+            return None
 
-    async def delete_integration(self, name: str) -> bool:
+    async def list_integrations(
+        self, user_id: Optional[int] = None
+    ) -> Dict[str, Dict[str, Any]]:
+        """
+        List integrations scoped to a tenant user.
+        """
         async with self._lock:
-            existing = self._cfg.pop(name, None)
+            if user_id is not None:
+                return {
+                    name: dict(cfg)
+                    for (uid, name), cfg in self._cfg.items()
+                    if uid == user_id
+                }
+            return {name: dict(cfg) for (uid, name), cfg in self._cfg.items()}
+
+    async def delete_integration(self, name: str, user_id: int = 1) -> bool:
+        """
+        Delete a tenant-owned integration.
+        """
+        async with self._lock:
+            existing = self._cfg.pop((user_id, name), None)
             if existing is None:
                 return False
             try:
-                await asyncio.to_thread(self._delete_persisted_integration, name)
+                await asyncio.to_thread(
+                    self._delete_persisted_integration, name, user_id
+                )
             except Exception as exc:
                 logger.exception("Failed to delete integration %s", name)
                 raise IntegrationManagerError(str(exc)) from exc
             return True
 
-    async def get_handler(self, name: str) -> Any:
-        """
-        Return the provider-specific service handler responsible for the named integration.
-        For messaging/email/calendar/storage/crm this returns the higher-level service instance
-        (EmailService/NotificationService/CalendarService/StorageService/CRMSyncService).
-        Callers should then use that service's public methods (e.g. send_email, list_events, list_files).
-        """
-        cfg = await self.get_config(name)
+    async def get_handler(self, name: str, user_id: Optional[int] = None) -> Any:
+        cfg = await self.get_config(name, user_id=user_id)
         if not cfg:
             raise IntegrationManagerError(f"integration not found: {name}")
         provider = (cfg or {}).get("type", "").lower()
@@ -174,11 +254,9 @@ class IntegrationManager:
             return get_notification_service()
         if provider in ("kb", "chroma", "vector_db"):
             return get_kb_manager()
-        # fallback: return raw config for custom handling
         return cfg
 
 
-# module-level singleton
 _default_integration_manager: Optional[IntegrationManager] = None
 
 
@@ -189,13 +267,11 @@ def get_integration_manager() -> IntegrationManager:
     return _default_integration_manager
 
 
-# convenience wrappers -------------------------------------------------------
-async def register_integration(name: str, cfg: Dict[str, Any]) -> None:
-    await get_integration_manager().register_integration(name, cfg)
+async def register_integration(
+    name: str, cfg: Dict[str, Any], user_id: int = 1
+) -> None:
+    await get_integration_manager().register_integration(name, cfg, user_id=user_id)
 
 
-async def get_integration_handler(name: str) -> Any:
-    return await get_integration_manager().get_handler(name)
-
-
-
+async def get_integration_handler(name: str, user_id: Optional[int] = None) -> Any:
+    return await get_integration_manager().get_handler(name, user_id=user_id)

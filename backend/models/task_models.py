@@ -55,6 +55,13 @@ class Task(Base):
         nullable=True,
         index=True,
     )
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+        default=1,
+        server_default="1",
+    )
     created_by: Mapped[int] = mapped_column(
         ForeignKey("users.id", ondelete="CASCADE"),
         nullable=False,

@@ -11,7 +11,9 @@ from ..core.database import Base
 if TYPE_CHECKING:
     from .agent_models import Agent
     from .conversation_models import Conversation
+    from .integration_models import Integration
     from .task_models import Task
+    from .workflow_models import Workflow
 
 
 class User(Base):
@@ -47,13 +49,28 @@ class User(Base):
         onupdate=func.now(),
     )
 
-    agents: Mapped[list["Agent"]] = relationship(back_populates="creator")
-    conversations: Mapped[list["Conversation"]] = relationship(back_populates="user")
+    agents: Mapped[list["Agent"]] = relationship(
+        "Agent", back_populates="user", foreign_keys="Agent.user_id", cascade="all, delete-orphan"
+    )
+    created_agents: Mapped[list["Agent"]] = relationship(
+        "Agent", back_populates="creator", foreign_keys="Agent.created_by"
+    )
+    conversations: Mapped[list["Conversation"]] = relationship(
+        "Conversation", back_populates="user", cascade="all, delete-orphan"
+    )
+    integrations: Mapped[list["Integration"]] = relationship(
+        "Integration", back_populates="user", cascade="all, delete-orphan"
+    )
+    workflows: Mapped[list["Workflow"]] = relationship(
+        "Workflow", back_populates="user", cascade="all, delete-orphan"
+    )
     assigned_tasks: Mapped[list["Task"]] = relationship(
+        "Task",
         back_populates="assignee",
         foreign_keys="Task.assigned_to",
     )
     created_tasks: Mapped[list["Task"]] = relationship(
+        "Task",
         back_populates="creator",
         foreign_keys="Task.created_by",
     )
